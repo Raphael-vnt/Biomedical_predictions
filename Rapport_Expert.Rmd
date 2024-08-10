@@ -1,0 +1,1909 @@
+---
+title: "Projet 2024 M2 ISF"
+output: 
+  html_document:
+    beamer_presentation:
+    slide_level: 2
+    toc: true
+    toc_float: true
+---
+
+<style type="text/css">
+  body{
+  font-size: 12pt;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r warning=FALSE, message = FALSE}
+
+## Load packages
+
+library(ggplot2)
+library(GGally)
+library(cowplot)
+library(corrplot)
+library(dplyr)
+library(scales)
+library(caret)
+library(car)
+library(nortest)
+library(glmnet)
+library(lme4)
+library(Metrics)
+library(gt)
+library(seriation)
+library(vcd)
+library(fitdistrplus)
+library(knitr)
+library(DHARMa)
+library(truncreg)
+library(randomForest)
+library(xgboost)
+library(reshape)
+library(reshape2)
+library(tidyverse)
+```
+
+
+```{r}
+## Custom function for plotting lm summary
+
+my.summary.lm = function (x, digits = max(3L, getOption("digits") - 3L), 
+                       symbolic.cor = x$symbolic.cor, 
+                       signif.stars = getOption("show.signif.stars"), 
+                       my.rows, ...)                     # NOTE NEW my.rows ARGUMENT
+{
+  cat("\nCall:\n", paste(deparse(x$call), sep = "\n", collapse = "\n"), 
+      "\n\n", sep = "")
+  resid <- x$residuals
+  df <- x$df
+  rdf <- df[2L]
+  cat(if (!is.null(x$weights) && diff(range(x$weights))) 
+    "Weighted ", "Residuals:\n", sep = "")
+  if (rdf > 5L) {
+    nam <- c("Min", "1Q", "Median", "3Q", "Max")
+    rq <- if (length(dim(resid)) == 2L) 
+      structure(apply(t(resid), 1L, quantile), dimnames = list(nam, 
+                                                               dimnames(resid)[[2L]]))
+    else {
+      zz <- zapsmall(quantile(resid), digits + 1L)
+      structure(zz, names = nam)
+    }
+    print(rq, digits = digits, ...)
+  }
+  else if (rdf > 0L) {
+    print(resid, digits = digits, ...)
+  }
+  else {
+    cat("ALL", df[1L], "residuals are 0: no residual degrees of freedom!")
+    cat("\n")
+  }
+  if (length(x$aliased) == 0L) {
+    cat("\nNo Coefficients\n")
+  }
+  else {
+    if (nsingular <- df[3L] - df[1L]) 
+      cat("\nCoefficients: (", nsingular, " not defined because of singularities)\n", 
+          sep = "")
+    else cat("\nCoefficients:\n")
+    coefs <- x$coefficients[my.rows,]                      # SUBSET my.rows
+    if (!is.null(aliased <- x$aliased) && any(aliased)) {
+      cn <- names(aliased)
+      coefs <- matrix(NA, length(aliased), 4, dimnames = list(cn, 
+                                                              colnames(coefs)))
+      coefs[!aliased, ] <- x$coefficients
+    }
+    printCoefmat(coefs, digits = digits, signif.stars = signif.stars, 
+                 na.print = "NA", ...)
+  }
+  cat("\nResidual standard error:", format(signif(x$sigma, 
+                                                  digits)), "on", rdf, "degrees of freedom")
+  cat("\n")
+  if (nzchar(mess <- naprint(x$na.action))) 
+    cat("  (", mess, ")\n", sep = "")
+  if (!is.null(x$fstatistic)) {
+    cat("Multiple R-squared: ", formatC(x$r.squared, digits = digits))
+    cat(",\tAdjusted R-squared: ", formatC(x$adj.r.squared, 
+                                           digits = digits), "\nF-statistic:", formatC(x$fstatistic[1L], 
+                                                                                       digits = digits), "on", x$fstatistic[2L], "and", 
+        x$fstatistic[3L], "DF,  p-value:", format.pval(pf(x$fstatistic[1L], 
+                                                          x$fstatistic[2L], x$fstatistic[3L], lower.tail = FALSE), 
+                                                       digits = digits))
+    cat("\n")
+  }
+  correl <- x$correlation
+  if (!is.null(correl)) {
+    p <- NCOL(correl)
+    if (p > 1L) {
+      cat("\nCorrelation of Coefficients:\n")
+      if (is.logical(symbolic.cor) && symbolic.cor) {
+        print(symnum(correl, abbr.colnames = NULL))
+      }
+      else {
+        correl <- format(round(correl, 2), nsmall = 2, 
+                         digits = digits)
+        correl[!lower.tri(correl)] <- ""
+        print(correl[-1, -p, drop = FALSE], quote = FALSE)
+      }
+    }
+  }
+  cat("\n")
+  invisible(x)
+}
+```
+
+
+```{r}
+# Custom function for selectin less significative coefficients
+less_significative <- function(x) {
+  alpha <- 0.05
+  pval <- summary(x)$coefficients[,4]
+  
+  sig <- pval > alpha & !grepl('sujet', names(pval), fixed = TRUE)
+  intr <- grepl(":", names(coef(x)))
+  
+  list_p_values <- pval[sig]
+  
+  return(names(list_p_values))
+}
+```
+
+```{r}
+get_AIC_from_L <- function(x) {
+  return(2 * length(coef(x)) - 2 *x$logLik)
+}
+```
+
+
+```{r}
+# Custom function for ploting summary glm gamma 
+custom_summary_glm <- function(x, nb = 10) {
+  pval <- summary(x)$coefficients[,4]
+  data <- data.frame(coef = coef(x), p_value = pval)
+  data <- data %>%
+    mutate(signif = case_when(
+      p_value <= 0.001 ~ '***',
+      p_value <= 0.01 ~ '**',
+      p_value <= 0.05 ~ '*',
+      p_value <= 0.1 ~ '.',
+       p_value <= 1 ~ '',
+      TRUE ~ ''
+    ))
+  
+  data <- data[order(data$p_value, decreasing= TRUE), ]
+  data <- head(data, nb)
+  rownames <- rownames(data)
+  
+  width <- 13
+  
+  cat("\nCall:\n", paste(deparse(x$call), sep = "\n", collapse = "\n"), 
+        "\n\n", sep = "")
+  
+  cat(sprintf("%-*s%-*s%-*s%-*s\n", width, "", width, "coef", width, "Pr(>|t|)", width, "signif"))
+  
+  for (i in 1:length(rownames)) {
+    cat(sprintf("%-*s%-*s%-*s%-*s\n", width, rownames[i], width, format(data[i, "coef"], digits = 3), width, format(data[i, "p_value"], digits = 5), width, data[i, "signif"]))
+  }
+  
+  if (length(x$family[1])) {
+    cat('\n(Dispersion parameter taken to be', summary(x)$dispersion, ')')
+    cat('\n\nNull deviance : ', x$null.deviance, ' on', x$df.null, 'degrees of freedom')
+    cat('\nResid deviance : ', x$deviance, ' on', x$df.residual, 'degrees of freedom')
+    cat('\nAIC :', x$aic)
+    cat('\nNumber of Fisher scoring iterations :', x$iter)
+  } 
+  else {
+    c_aic <- get_AIC_from_L(x) 
+    cat('\nAIC :', c_aic)
+  }
+}
+
+```
+
+
+Raphaël VINTELER   
+Ghada AYED   
+Nicolas DARBOUX   
+
+
+**Abstrait** 
+
+
+**Objectif de l'étude**
+
+
+Pour rappel, le jeu de données est composé d'une série de mesures biomédicales de *42* personnes (**sujet**) atteintes d'une maladie dégénérative à un stade précoce, recrutées pour un essai de six mois d'un dispositif de télésurveillance permettant de suivre l'évolution des symptômes dans le temps (**duree**).   
+L'objectif principal de ce projet de données est de construire un modèle de prédiction du score (**score**) en fonction du temps écoulé depuis le recrutement dans l'essai (**duree**) et de tout ou partie des variables (régresseurs/facteurs) contenues dans l'ensemble de données. La variable duree est donc incluse dans l'étude.
+
+
+**Dataset fourni** 
+
+
+le train contient *4388* observations à partir duquel vous construirez votre modèle final. Notez que le score final doit être calculé à l'échelle (et non sur une transformation de la cible/variable à expliquer).
+
+
+
+# **1. Visualisation dataset**
+
+-------------------------------------
+
+
+```{r warning=FALSE, message = FALSE}
+train<-read.csv('train_maladie.csv', header = T, sep = ",",dec=".")
+testX<-read.csv('test_X_maladie.csv', header = T, sep = ",",dec=".")
+```
+
+
+**Head dataframe :**
+
+
+```{r}
+head(train) %>%gt()
+```
+
+**Type des colonnes :**
+
+
+```{r}
+sapply(train, class)
+```
+**Stats var numériques :**
+
+```{r}
+
+var_temp <- c("score", "duree", "age", "genre", "FF.Abs", "FF.DDP", "AV", "AV.dB")
+ 
+# Créez un nouveau dataframe avec seulement les variables sélectionnées
+train_subset <- train[, var_temp]
+
+summary(train_subset)
+```
+On observe plusieurs choses d'après le summmary :  
+
+* On a bien 42 sujets 
+* On observe un minimum de durée négatif que l'on analysera par la suite
+* Des scores strictement postifs compris entre 5 et 38
+
+
+La plupart des variables sont des variables numériques. Nous transformons les variables catégoriques **genre** et **sujet** en facteurs via la commande : 
+```{r, echo = TRUE}
+train$sujet <- as.factor(train$sujet)
+train$genre <- as.factor(train$genre)
+levels(train$genre) <- c('M', 'F')
+
+testX$sujet <- as.factor(testX$sujet)
+testX$genre <- as.factor(testX$genre)
+levels(testX$genre) <- c('M', 'F')
+```
+
+
+Nous vérifions également que nous n'avons pas de valeurs NA dans notre dataset :  
+```{r, echo = TRUE}
+listMissingColumns <- colnames(train)[apply(train, 2, anyNA)]
+print(listMissingColumns) 
+```
+
+Enfin nous vérifions s'il n'y a pas de lignes dupliquées : 
+
+```{r, echo = TRUE}
+cat('Nb de lignes dupliquées : ', sum(duplicated(train)))
+```
+
+
+# **2. Analyse descriptive**
+## **2.1 Etude de la variable score**
+Observons dans un premier temps la distribution de la variable réponse **score** :  
+
+**Valeur de quantiles :** 
+
+```{r}
+summary(train$score)
+```
+
+**Histogramme et boxplot : **
+```{r}
+hist <-ggplot(train, aes(x=score)) + geom_histogram(binwidth=3, fill="#69b3a2", color="black", alpha=.4) + theme_minimal() 
+boxplot <- ggplot(train, aes(y=score)) + geom_boxplot(fill = "#69b3a2", alpha = .4) + theme_minimal() 
+plot_grid(hist, boxplot)
+```
+
+On observe que la distribution est relativement symétrique et strictement positive. 
+Nous testons dans un premier temps les modèles linéaires gaussiens dans l'objectif d'étudier les résidus afin de valider ou non les hypothèses de Gauss-Markov. 
+Nous testerons par la suite des GLM à lois continues positives (Gamma, log-normale, normale tronquée, ...).
+
+
+## **2.2 Etude variable duree**
+
+Vérifions également la distribution de **durée** :
+
+```{r}
+summary(train$duree)
+```
+
+```{r warning = FALSE}
+ggplot(train, aes(x=duree)) + geom_histogram(binwidth=3, fill="#ffcc99", color="black", alpha=.4) +  geom_vline(aes(xintercept=mean(duree)),color="black", linetype="dashed", size=1) + 
+theme_minimal() 
+```
+
+Nous observons des durées négatives, affichons les sujets concernés par ces durées : 
+
+```{r}
+anomaly <- train %>% 
+  filter(duree <0)
+as.numeric(anomaly$sujet)
+```
+
+```{r}
+sujet_34 <- train %>% 
+  filter(sujet ==34)
+sujet_42 <- train %>% 
+  filter(sujet ==42)
+
+temp <- head(sujet_34, 4)
+temp2 <- head(sujet_42, 4)
+temp3 <- rbind(temp,temp2)
+
+head(temp3[c("sujet","age","genre", "duree", 'score')], 10) %>%gt()
+```
+
+Nous observons qu'il s'agit uniquement des sujets *34* et *42* et de leur premières valeurs. Nous partons du principe que ces valeurs négatives correspondent à des analyses antérieurs au début du test et décidons de les conserver (par exemple de patients qui ont changé de médecins et ont apporté leurs anciens bilans pour l'étude). Etant de plus des cas marginales, nous décidons de les conserver. 
+
+
+**Comparaison jeu de test**
+
+Nous comparons les valeurs de durées pour chaque sujets entre le *train set* et le *test set* fourni : 
+
+```{r}
+train_temp <- mutate(train, source = "train")[c("source","duree","sujet")]
+test_temp <- mutate(testX, source = "test")[c("source","duree","sujet")]
+
+duree_temp <- bind_rows(train_temp, test_temp)
+
+ggplot(duree_temp, aes(x=sujet, y=duree, color=source)) +
+  geom_jitter(position=position_jitter(0.2))+ 
+  theme_minimal()
+```
+
+Via un graphique stripchart, nous voyons que pour tous les sujets, les durées du jeu de test sont dans la continuité de celles présentes dans le train.
+
+Enfin vérifions si tous les sujets du jeu de test se retrouvent sur le train : 
+
+```{r, echo = TRUE}
+all(testX$sujet %in% train$sujet)
+```
+
+**Valeurs de durée dupliquées**
+
+En explorant le dataset, nous observons qu'un même sujet apparait plusieurs fois avec la même durée. Par exemple le sujet 1 possède plusieurs durées à environ 5.645 (arrondi) :   
+
+```{r}
+duplicate <- data.frame(train)
+duplicate$entier <- as.integer(duplicate$duree)
+
+anomaly <- duplicate %>% 
+  filter(sujet == 1 & entier == 5)
+
+head(anomaly) %>%gt()
+```
+
+Nous observons également que la variance des variables pour cette même durée est relativement élevée. Il est difficile sans avis du métier de savoir si ces observations constituent des anomalies (et encore plus quelles lignes garder si c'est le cas !). 
+Nous supposons qu'il s'agisse d'un seul prélevement et que les résultats sont observés à par exemple plusieurs heures à la même journée.  
+Nous partons du principe alors que ces lignes ne sont pas des erreurs du dataset malgré le caractère étrange de celles-ci et les conservons donc. 
+
+
+## **2.3 Etude de l'age** 
+
+```{r echo = FALSE}
+hist(train$age, freq = FALSE, main = "Histogramme des ages",
+     xlab = "Age", ylab = "Densité", col = "lightblue")
+```
+
+La variable **age** est comprise entre 36 et 85, avec certaines disproportions par tranches.  
+Nous décidons de segmenter la variable **age** via les tranches suivantes : 
+
+```{r}
+breaks <- c(-Inf, 55, 60, 70, 75, Inf)
+
+# Créer une nouvelle variable discrétisée
+train$age_discrete <- cut(train$age, breaks = breaks, labels = c("0-55", "55-60", "60-70", "70-75", "75+"), include.lowest = TRUE)
+train$age_discrete <- as.factor(train$age_discrete)
+
+
+# Calculer la fréquence de chaque catégorie
+frequency_table <- table(train$age_discrete)
+# Créer le barplot
+barplot(frequency_table, main = "Barplot de la variable discrétisée", xlab = "Tranches", ylab = "Fréquence",  col = "lightblue", border = "black")
+
+```
+
+
+## **2.4 Etude bivariée**
+#### **Variables Numériques**
+
+Dans cette partie nous souhaitons étudier la relation entre le **score** et les features. 
+Comme notre jeu de données ne contient pas énormément de variables nous pouvons explorer graphiquement ces dernières. 
+Pour les variables numériques, nous crééons un graphique de Pareto qui se lit de cette manière :   
+
+* L'histogramme en gris represente la distribution de la variable numérique avec comme échelle *Count* à gauche. 
+* La ligne rouge represente la moyenne de score des individus présents dans chaque bins des histogrammes, avec l'échelle *Average score* à droite. 
+
+Notre objectif est d'observer d'un premier coup d'oeil des relations potentiellement importantes avec notre variable target. 
+
+```{r warning=FALSE, message = FALSE}
+hist_line_plot <- function(data, var) {
+  
+  col_mean <- rgb(0.9, 0.2, 0.2, 1) 
+  col_hist <- "#b3b3cc"
+  tempo <- data.frame(data)
+  
+  min = min(tempo[[var]])
+  max = quantile(tempo[[var]], 0.99)
+  breaks <- seq(from = min, to = max, length.out = 20) 
+
+  tempo$var_discr <- breaks[findInterval(tempo[[var]], breaks, rightmost.closed = TRUE)]
+
+  expo <- table(tempo$var_discr)
+  counts_df <- as.data.frame(expo)
+  names(counts_df) <- c("var_discr", "Freq")
+  
+  mean_data <- tempo %>%
+    group_by(var_discr) %>%
+    summarize(mean_variable = mean(score, na.rm = TRUE))
+  
+  counts_df <- merge(counts_df, mean_data, by ='var_discr')
+  counts_df$var_discr <- as.numeric(as.character(counts_df$var_discr))
+  
+  coeff <- 1.2*max(counts_df$mean_variable) / max(counts_df$Freq)
+  
+  plot <- ggplot(counts_df, aes(x=var_discr)) +
+    geom_bar( aes(y=Freq), stat="identity", size=.1, fill = col_hist, color="black", alpha=.4) + 
+    geom_line( aes(y= mean_variable/ coeff), linewidth=1, color = col_mean) +
+    scale_y_continuous(
+      name = "Count",
+      sec.axis = sec_axis(~.*coeff, name="Average score")
+    ) + 
+    geom_point( aes(y= mean_variable/ coeff), size=2, color = col_mean, shape = 18) +
+    scale_y_continuous(
+      name = "Count",
+      sec.axis = sec_axis(~.*coeff, name="Average score")
+    ) + 
+    xlab(var) + 
+    theme_minimal() 
+  
+  return(plot)
+}
+
+a = hist_line_plot(train, 'duree')
+b = hist_line_plot(train, 'VFNL')
+c = hist_line_plot(train, 'CDNL')
+d = hist_line_plot(train, 'EFS') 
+
+e = hist_line_plot(train, 'FF')
+f = hist_line_plot(train, 'FF.Abs')
+g = hist_line_plot(train, 'BTC1')
+h = hist_line_plot(train, 'BTC2')
+
+i = hist_line_plot(train, 'AV')
+j = hist_line_plot(train, 'AV.dB')
+k = hist_line_plot(train, 'AV.APQ3')
+l = hist_line_plot(train, 'age')
+
+m = hist_line_plot(train, 'AV.APQ11')
+n = hist_line_plot(train, 'age')
+o = hist_line_plot(train, 'BTC1')
+p = hist_line_plot(train, 'BTC2')
+
+plot_grid(a, b, c, d)
+plot_grid(e, f, g, h)
+plot_grid(i, j, k, l)
+#plot_grid(m, n, o, p)
+
+```
+
+Pour les variables affichées, il est difficile d'observer une tendance forte avec le **score**, seulement quelques relations légèrement monotones pour certaines d'entre elles. 
+
+#### **Variables catégoriques :**
+
+**Genre**
+
+Le dataset comporte globalement plus d'hommes que de femmes, nous pouvons le vérifier : 
+
+```{r}
+genre_table <- table(train$genre)
+genre_df <- as.data.frame(genre_table)
+colnames(genre_df) <- c("Genre", "Frequence")
+
+genre_df_prop <- as.data.frame(prop.table(genre_table))
+colnames(genre_df_prop) <- c("Genre", "Frequence")
+
+print(genre_df)
+```
+
+
+
+```{r, warning = FALSE, message = FALSE}
+bp<- ggplot(genre_df_prop, aes(x="", y=Frequence, fill=Genre))+
+geom_bar(width = 1, stat = "identity")
+pie <- bp + coord_polar("y", start=0)
+
+blank_theme <- theme_minimal()+
+  theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.border = element_blank(),
+  panel.grid=element_blank(),
+  axis.ticks = element_blank(),
+  plot.title=element_text(size=14, face="bold")
+  )
+pie +  scale_fill_manual(values = c(c("#add8e6", "#ffb6c1"))) +  blank_theme +
+  theme(axis.text.x=element_blank()) +
+  geom_text(aes(y = Frequence/3 + c(0, cumsum(Frequence)[-length(Frequence)]), 
+            label = percent(Frequence)), size=5)
+
+```
+
+
+```{r}
+ggplot(train, aes(x=genre, y=score)) +
+  geom_violin(trim=FALSE, color="black", alpha = .4)+
+  geom_boxplot(width=0.1 , fill='#99ff99', color="black", alpha = .4)+ 
+  theme_minimal() 
+```
+
+On observe que le premier et deuxième quantiles de score sont relativement différents entre les hommes et les femmes.
+Egalement les distributions de score pour les 2 genres n'ont pas d'outliers et ne sont pas asymétriques. 
+
+```{r}
+subset <- train %>% filter(sujet %in% seq(1,40, 4))
+ggplot(subset, aes(x=sujet, y=score)) +
+  geom_boxplot(width=0.1 , fill='#cc99ff', color="black", alpha = .4)+
+  theme_minimal()
+
+```
+
+Concernant les sujets, on observe que leurs scores sont très différents entre eux.
+Notons également pour certains sujets la présence d'outliers parmi leurs scores ( > 1.5 l'IQR). 
+
+## **2.5 Corrélations des variables**
+```{r}
+ggpairs(train,                
+        columns = c(5, 6, 7, 12, 13, 4, 18),
+        aes(  
+            alpha = 0.5)) 
+```
+
+Nous observons ici des corrélations élevées entre certaines variables dépendantes, en particulier celles relatives à la fréquence vocale (FF) et à l'amplitude (AA)
+Cela suggère l'existence d'informations redondantes au sein des variables qui peuvent affecter les coefficients finaux.
+Nous pouvons l'observer plus clairement avec un graphique de corrélation ordonné :
+
+```{r}
+
+train_num <- train[, !names(train) %in% c("genre", "sujet", 'age_discrete')] 
+M = cor(train_num)
+dist2order = function(corr, method, ...) {
+  d_corr = as.dist(1 - corr)
+  s = seriate(d_corr, method = method, ...)
+  i = get_order(s)
+  return(i)
+}
+i = dist2order(M, 'OLO')
+corrplot(M[i, i], cl.pos = 'n') 
+```
+
+Nous observons 2 blocs de variables fortement corrélées entre elles (FF et AA en bleu foncée). Notons aussi les faibles corrélations entre le **score** et les variables indépendantes.   
+Regardons les valeurs exactes de ces corrélations : 
+
+```{r}
+variables_selectionnees <- c("score", "duree", "FF", "FF.Abs", "FF.RAP", "FF.PPQ5", 
+                              "FF.DDP", "AV", "AV.dB", "AV.APQ3", "AV.APQ5", "AV.APQ11", 
+                              "AV.DDA")
+ 
+train_subset <- train[, variables_selectionnees]
+matrice_correlation <- cor(train_subset)
+print(matrice_correlation)
+```
+
+En regardant ces valeurs, il est clair que toutes les variables blocs FF et AA sont corrélées (presque 70% pour la majorité). Egalement nous avons des corrélations de quasiment 1 (0.99) au sein des blocs FF et AA. Enfin la variable **BTC2** ne forme pas un bloc mais est très corrélée négativement avec la majorité des varibales. 
+
+Par la suite dans une de nos méthodes de sélections de variables. Nous ne choisirons qu'une variable, celle la plus corrélée avec le score, pour chaque bloc (FF et AA). Ici nous remarquons qu'il s'agit pour le bloc FF de la variable **FF** et pour le bloc AA la variable **AV.APQ11**. 
+
+Nous calculons également pour les variables catégorielles, à savoir **sujet**, **age** (discretisé) et **genre** le coefficient V de Cramer.
+Le V de Cramer est une mesure d’association, basée sur la statistique du χ2 de Pearson, avec des valeurs comprises entre 0 et 1. Nous obtenons la matrice de corrélation suivante : 
+
+```{r echo = FALSE}
+var_corr <- c('sujet', 
+             'age_discrete', 
+             'genre'
+)
+df_corr <- train[, var_corr, drop = FALSE]
+
+## Etude via le V de Kramer : 
+
+# Initialize empty matrix to store coefficients
+empty_m <- matrix(ncol = length(df_corr),
+                  nrow = length(df_corr),
+                  dimnames = list(names(df_corr), 
+                                  names(df_corr)))
+# Function that accepts matrix for coefficients and data and returns a correlation matrix
+calculate_cramer <- function(m, df) {
+  for (r in seq(nrow(m))){
+    for (c in seq(ncol(m))){
+      m[[r, c]] <- assocstats(table(df[[r]], df[[c]]))$cramer
+    }
+  }
+  return(m)
+}
+
+cor_matrix <- calculate_cramer(empty_m ,df_corr)
+corrplot(cor_matrix, method = 'number')
+
+```
+
+On observe alors des valeurs d'association maximale pour la variable **sujet** par rapport aux autres variables catégorielles. Ce qui parait cohérent puisque l'information de l'age et du genre sont déjà capté par la variable **sujet**.
+
+
+```{r}
+train_selected <- subset(train, select = -c(age, genre, age_discrete))
+```
+
+
+
+## **2.6 Focus sur score vs duree**
+```{r, message = FALSE, warning=FALSE}
+all <- ggplot(train, aes(x=duree, y=score)) + 
+  geom_point() +  
+  geom_smooth(method=lm, se=FALSE, fullrange=TRUE, col = 'red')+ 
+  theme_minimal()
+
+sample <- train %>% 
+  filter(sujet %in% c(1, 2, 3, 4, 12))
+
+specific <- ggplot(sample, aes(x=duree, y=score, color = sujet)) +
+  geom_point() + 
+  geom_smooth(method=lm, se=FALSE, fullrange=TRUE)+
+  theme_minimal()
+
+plot_grid(all, specific, labels = 'AUTO')
+```
+
+Aucune relation n'apparaît à première vue lorsque l'on regarde le score par rapport à la durée seule sur **A**.   
+Cependant, lorsque nous représentons la durée pour certains sujets spécifiques sur **B**, elle semble suivre une tendance qui dépend de la durée, qu'elle soit croissante, décroissante ou constante.  
+
+Cela est principalement dû au fait que notre jeu de données est un *"panel dataset"*, avec les mêmes individus (**sujet**) plusieurs fois en tant qu'observation, mais à des instants différents (**duree**). 
+Cela peut être problématique dans la partie modélisation car cela entraîne souvent une autocorrélation (résidus dépendants les uns des autres), on vérifiera cette hypothèse lors de la construction de nos modèles. 
+Si cela est avérée,les modèles linéaires ne serons pas adaptés à ce type de problème, et nous devrons nous tourner vers d'autres solutions.  
+
+Enfin, notons que la tendance linéaire par sujet semble changer à partir d'une certaine durée (environ 70%).
+
+
+## **2.7 Création des nouvelles variables avec ACP:**
+
+Comme nous l'avons observé, nos variables cliniques sont très corrélées entre elles, nous crééons donc de nouvelles variables comme combinaisons linéaires de ces dernières. 
+
+```{r}
+# Créer train_1 en supprimant les variables score, durée, genre, sujet et age
+train_1 <- subset(train, select = -c(genre, score, sujet, duree, age, age_discrete))
+# Perform PCA
+pca_result <- prcomp(train_1, rank=5)
+# Nous rajoutons dans le train la colonne de la première composante de l'ACP
+train_selected$PC1 <- pca_result$x[, 1]
+summary(pca_result)
+
+```  
+
+En regardant les composantes principales et leurs proportions de variances, on ne garde que la première car celle-ci conserve déjà plus de 99 % de la variance expliquée.   
+
+
+
+## **2.8 Split des données**
+
+Nous divisons le train set original en base d'apprentissage, de validation et de test avec une proportion respective de *70/10/20* %, pour évaluer la performance du modèle sur une partie de notre jeu de données.   
+Le set de validation nous permet de selectionner et tuner les modèles entre eux en limitant le risque d'overfit. 
+Le set de test quant à lui nous permettra d'estimer sans biais l'erreur attendu sur le set sans labels, et de conclure sur l'efficacité de notre modèle retenu.  
+Egalement Comme il s'agit d'un panel dataset, il est important de ne pas séparer simplement de manière aléatoire le jeu de validation et le jeu d'entrainement.  
+Nous voulons tenir compte des ordres chronologiques des analyses. Pour cela nous calculons le quantile 70% et 80% pour chaque sujet puis repartissons les sets de cette manière :  
+
+
+* inférieur à 70% quantile,  *set d'apprentissage*       
+* compris entre 70% et 80%,  *set de validation*       
+* supérieur à 80%,  *set de test*     
+
+
+```{r, echo = TRUE}
+quantiles_1 <- train_selected %>%
+  group_by(sujet) %>%
+  summarize(value_quantile_1 = quantile(duree, 0.7))
+
+quantiles_2 <- train_selected %>%
+  group_by(sujet) %>%
+  summarize(value_quantile_2 = quantile(duree, 0.8))
+
+train_result <- train_selected %>%
+  left_join(quantiles_1, by = "sujet")
+train_result <- train_result %>%
+  left_join(quantiles_2, by = "sujet")
+
+apprentissage <- train_result %>% 
+  filter(duree <=value_quantile_1)
+validation <- train_result %>% 
+  filter(duree > value_quantile_1 & duree <= value_quantile_2)
+test <- train_result %>% 
+  filter(duree >value_quantile_2)
+
+drop <- c("value_quantile_1","value_quantile_2")
+apprentissage = apprentissage[,!(names(apprentissage) %in% drop)]
+validation = validation[,!(names(validation) %in% drop)]
+test = test[,!(names(test) %in% drop)]
+```
+
+```{r}
+
+## Preparation pour les modèles complémentaires et glmnet
+
+## One hot encoding
+apprentissage_one_hot <- dummyVars(" ~ . - PC1", data = apprentissage)
+apprentissage_one_hot <- data.frame(predict(apprentissage_one_hot, newdata = apprentissage))
+
+validation_one_hot <- dummyVars(" ~ . - PC1", data = validation)
+validation_one_hot <- data.frame(predict(validation_one_hot, newdata = validation))
+
+test_one_hot <- dummyVars(" ~ . - PC1", data = test)
+test_one_hot <- data.frame(predict(test_one_hot, newdata = test))
+
+real_test_one_hot <- dummyVars(" ~ .", data = testX)
+real_test_one_hot <- data.frame(predict(real_test_one_hot, newdata = testX))
+
+
+## Séparer X de y 
+predictors_train <- apprentissage_one_hot[, !names(apprentissage_one_hot) %in% "score"]
+target_train <- apprentissage_one_hot$score
+
+predictors_validation <- validation_one_hot[, !names(validation_one_hot) %in% "score"]
+target_validation <- validation_one_hot$score
+
+predictors_test <- test_one_hot[, !names(test_one_hot) %in% "score"]
+target_test <- test_one_hot$score
+
+
+# Transformation en matrice
+matrix_train <- data.matrix(predictors_train)
+train_label <- data.matrix(target_train)
+
+matrix_validation <- data.matrix(predictors_validation)
+validation_label <- data.matrix(target_validation)
+
+matrix_test <- data.matrix(predictors_test)
+test_label <- data.matrix(target_test)
+
+matrix_real_test <- data.matrix(real_test_one_hot)
+```
+
+
+
+# **3. Modélisation **
+
+## **3.1 Modèles LM** 
+Dans cette partie, nous allons dans un premier temps construire 3 modèles linéaires "naïfs"  :
+
+* Le premier avec seulement ***duree*** et ***sujet***    
+* Le deuxième avec toutes les variables sauf ***sujet***   
+* Le troisième avec toutes les variables    
+
+#### **Modèle réduit à l'intercept**
+
+Nous construisons le modèle réduit à l'intercept qui servira de comparaison pour les modèles suivant.
+
+```{r}
+model_inter <- lm(formula= score~ 1 ,data=apprentissage)
+summary(model_inter)
+```
+
+#### **Modèle : score ~ duree + sujet**
+
+Nous testons un premier modèle linéaire avec comme seules variables explicatives **duree** et **sujet**.
+Notons que ce summary n'affiche pas l'integralité des coefficients (via une fonction de display custom) des sujets dans un soucis de lisibilité : 
+```{r, echo=TRUE}
+model_lm_1 <- lm(formula= score~ sujet + duree ,data=apprentissage)
+my.summary.lm(summary(model_lm_1),my.rows = c(2:4, 10, 20, 30, 41:43))
+```
+```{r}
+pred_lm_1_train <- predict(model_lm_1, type = 'response')
+rmse_lm_1_train <- rmse(apprentissage$score, pred_lm_1_train)
+cat('RMSE train : ', rmse_lm_1_train, '\n')
+
+pred_lm_1 <- predict(model_lm_1, newdata = validation, type = 'response')
+rmse_lm_1 <- rmse(validation$score, pred_lm_1)
+cat('RMSE validation : ', rmse_lm_1)
+```
+
+On observe un meilleur RSE que le modèle réduit à l'intercept, ainsi qu'un R carré elevé.
+Le RMSE est également plus élevé dans le set de validation, nous investiguerons cet écart par la suite. 
+
+
+#### **Modèle : score ~ . - sujet**
+
+```{r echo = TRUE}
+model_lm_2 <- lm(formula= score ~. - sujet - PC1 ,data=apprentissage) # -PC1 on enlève la composante principale custom créee précédemment
+summary(model_lm_2)
+```
+```{r}
+pred_lm_2_train <- predict(model_lm_2, type = 'response')
+rmse_lm_2_train <- rmse(apprentissage$score, pred_lm_2_train)
+cat('RMSE train : ', rmse_lm_2_train, '\n')
+
+pred_lm_2 <- predict(model_lm_2, newdata = validation, type = 'response')
+rmse_lm_2 <- rmse(validation$score, pred_lm_2)
+cat('RMSE validation : ', rmse_lm_2)
+```
+
+Les résultats sont bien moins satisfaisant que le premier modèle précédent avec un RSE proche du model null
+Le RMSE quant à lui est de plus de 7, ce qui est loin d'être bon au vu de la plage de **score** allant de 5 à 38.
+Nous montrons ainsi l'importance de la variable **sujet** dans notre jeu de données. Nous testons sur un dernier modèle avec toutes les variables pour valider notre hypothèse. 
+
+
+#### **Modèle : score ~ .**
+
+```{r echo = TRUE}
+model_lm_3 <- lm(formula= score ~. - PC1 ,data=apprentissage) # -PC1 on enlève la composante principale custom créee précédemment
+my.summary.lm(summary(model_lm_3),my.rows = c(2:4, 41:59))
+```
+
+```{r}
+pred_lm_3_train <- predict(model_lm_3, type = 'response')
+rmse_lm_3_train <- rmse(apprentissage$score, pred_lm_3_train)
+cat('RMSE train : ', rmse_lm_3_train, '\n')
+
+pred_lm_3 <- predict(model_lm_3, newdata = validation, type = 'response')
+rmse_lm_3 <- rmse(validation$score, pred_lm_3)
+cat('RMSE validation : ', rmse_lm_3)
+```
+
+Bien que légérement meilleur, nous obtenons des résultats similaire à notre premier modèle sur le RMSE du test et du train. 
+
+
+#### **Modèle méthode pas à pas**
+
+Ici nous testons de selectionner nos variables via une méthode stepwise.
+```{r, echo = TRUE}
+lm_all <- lm(formula= score ~ . - PC1  ,data=apprentissage)
+lm_both <- step(lm_all, direction="both", trace=0)
+#my.summary.lm(summary(lm_both),my.rows = c(2:4, 41:length(lm_both$coefficients)))
+```
+
+```{r}
+pred_lm_both_train <- predict(lm_both, type = 'response')
+rmse_lm_both_train <- rmse(apprentissage$score, pred_lm_both_train)
+cat('RMSE train : ', rmse_lm_both_train, '\n')
+
+pred_lm_both <- predict(lm_both, newdata = validation, type = 'response')
+rmse_lm_both <- rmse(validation$score, pred_lm_both)
+cat('RMSE validation : ', rmse_lm_both)
+```
+
+#### **Modèle méthodes régularisations**
+
+Nous testons dans cette partie plusieurs méthodes de régularisation à savoir Lasso, Ridge et ElasticNet.  
+
+**Lasso**
+
+```{r, warning = FALSE}
+set.seed(2024)
+grid_lasso<-c(0, 0.0001, 0.001, 0.01, 0.1, 0.2)
+custom<-trainControl(method='repeatedcv',number=3,repeats=5)
+lasso<-train(score~ . - PC1, data = apprentissage,
+                 method='glmnet',
+                  tuneGrid=expand.grid(alpha=1,lambda=grid_lasso),
+                   trControl=custom)
+ggplot(lasso) + scale_x_continuous(trans='log10') + theme_minimal() 
+
+```
+
+Via la méthode de Lasso, nous voyons que le tuning du paramètre d'erreur ne semble qu'augmenter le RMSE. Nous pouvons le vérifier avec : 
+
+```{r}
+lasso$results
+```
+
+**Ridge**
+
+```{r, warning = FALSE}
+set.seed(2024)
+lambda_ridge<-c(0, 0.01, 0.1, 0.5, 1, 5, 10 )
+ridge<-train(score~ . - PC1, data = apprentissage,
+                 method='glmnet',
+               tuneGrid=expand.grid(alpha=0,lambda=lambda_ridge),trControl=custom)
+
+ggplot(ridge) + scale_x_continuous(trans='log10') + theme_minimal() 
+```
+
+Nous observons le même phénomène pour la régresion Ridge. 
+
+
+**Elastic Net**
+
+```{r, warning = FALSE}
+set.seed(2024)
+alpha_Enet<-seq(0,0.5,length=10)
+lambda_Enet<-seq(0.01,0.12,length=10)
+
+ElNet<-train(score~ . - PC1, data =apprentissage,
+             method='glmnet',tuneGrid=expand.grid(alpha=alpha_Enet,lambda=lambda_Enet),trControl=custom)
+
+ggplot(ElNet)
+```
+
+```{r}
+glmnet <- glmnet(matrix_train, train_label, alpha = ElNet$bestTune[[1]], lambda = ElNet$bestTune[[2]])
+
+pred_glmnet_train <- predict(glmnet, newx = matrix_train)
+rmse_glmnet_train <- rmse(apprentissage$score, pred_glmnet_train)
+cat('RMSE train : ', rmse_glmnet_train, '\n')
+
+pred_glmnet <- predict(glmnet, newx = matrix_validation)
+rmse_glmnet <- rmse(validation$score, pred_glmnet)
+cat('RMSE validation : ', rmse_glmnet)
+```
+
+
+### **Résidus :  score ~ duree + sujet**
+
+Nous voyons que globalement les résultats sont très similaires entre les modèles, avec un RMSE globalement plus élevé pour la validation. 
+De plus, Le modèle avec seulement 2 variables obtient quasiment les mêmes performances. Analysons les résidus de ce dernier :
+
+
+*P1*
+```{r}
+par(mfrow=c(1, 2))
+sample <- apprentissage %>% 
+  filter(sujet %in% c(1:8))
+my_df <- sample
+predictions <- predict(model_lm_1, my_df)
+results <- data.frame(sujet = my_df$sujet, duree = my_df$duree, actual = my_df$score, predicted = predictions)
+results$residuals = results$actual - results$predicted
+
+plot(model_lm_1,1,main = 'P1 : Errors centered ')
+plot(results$predicted, results$residuals, col = results$sujet, xlab = "Fitted value", ylab = "", main = 'For some subjects')
+lines(lowess(results$predicted, results$residuals), col = "#FF8686")
+
+
+```
+
+Bien que les résidus soient centrées en 0, nous pouvons observer des patternes dans ces derniers, spécifique aux sujets, comme le montre la 2ème figure.  
+
+*P2*
+```{r}
+plot(model_lm_1,3, main ='P2 : Homosedascticity ')
+```
+
+
+L'hypothèse d'homosedasctisité semble quant à elle être respectée. 
+
+*P3*
+```{r}
+acf(residuals(model_lm_1), main = 'P3 : Errors uncorrelated')
+```
+
+Nous pouvons voir d'après le graphe ACF une clair autocorrélation entre les résidus. Pour s'en convaincre, nous pouvons réaliser un test de Durbin Watson : 
+
+```{r echo = TRUE}
+durbinWatsonTest(model_lm_1)
+```
+
+On obtient une p-value proche de 0, nous rejettons l'hypohtèse H0 et concluons que les résidus sont bien corrélées. 
+
+*P4*
+```{r}
+par(mfrow=c(1, 2))
+residuals_lm_1 <- residuals(model_lm_1)
+plot(model_lm_1,2, main = 'P4 : Errors ~ Gaussian distribution')
+hist(residuals_lm_1, freq = FALSE,
+     xlab = "Résidus", ylab = "Densité")
+```
+
+Bien que les résidus semblent symétrique, nous voyons des valeurs éloignés sur le QQplot et l'histogramme. Nous confirmons cela avec un test de Shapiro : 
+
+
+```{r echo = TRUE}
+shapiro.test(residuals(model_lm_1))
+```
+
+***Conclusions :*** 
+
+Comme nous l'avons vu, rajouter le **sujet** permet d'apporter plus de précision au model.   
+Cependant nous avons vu via l'analyse de résidus, que les hypothèses du modèle linéaire ne sont pas respectées, surtout pour le cas de l'autocorrélation, de patternes et non normalité dans les résidus. 
+Nous pouvons donc affirmer que des modèles linéaires classiques, ne permettent pas de capter toute l'information propre aux sujets compte tenu des variables que l'on dispose. En effet, ce type de modèle ne permet pas de changer la *pente* de regression pour chaque sujets (voir figure ci dessous).
+```{r}
+predictions <- predict(model_lm_1, apprentissage)
+
+results <- data.frame(sujet = apprentissage$sujet, duree = apprentissage$duree, actual = apprentissage$score, predicted = predictions )
+results_bis <- results %>% 
+  filter(sujet %in% c(1, 3, 12))
+
+ggplot(results_bis, aes(x=duree, y=actual, color = sujet)) +
+  geom_point() + 
+  geom_line(aes(y = predicted), size = 1) + 
+  theme_minimal()
+
+```
+
+Cela est problématique car il nous est impossible de modéliser correctement les scores. 
+Notre conclusion est qu'au vu du jeu de données **BRUT** le modèle linéaire n'est pas un modèle adapté. 
+
+
+
+#### **Modele score ~ (sujet + duree)^2**
+
+Dans cette partie nous testons une autre approche en rajoutant des variables d'interactions entre les termes. 
+Nous testons dans un premier temps une simple relation de degrès 2 entre **sujet** et **durée** : 
+```{r echo = TRUE}
+model_lm_4 <- lm(score ~ (sujet + duree)^2, data =apprentissage)
+my.summary.lm(summary(model_lm_4),my.rows = c(2:4, 42:48))
+```
+
+```{r}
+pred_lm_4_train <- predict(model_lm_4, type = 'response')
+rmse_lm_4_train <- rmse(apprentissage$score, pred_lm_4_train)
+cat('RMSE train : ', rmse_lm_4_train, '\n')
+
+pred_lm_4 <- predict(model_lm_4, newdata = validation, type = 'response')
+rmse_lm_4 <- rmse(validation$score, pred_lm_4)
+cat('RMSE validation : ', rmse_lm_4)
+```
+Nous pouvons voir des résultats largement amélioré comparé à nos précédents modèles. Il faut néanmoins faire attention à ce type 
+de méthodes, car en rajoutant d'avantages de variables , le nombre de coefficients explose, engendrant généralement des problèmes d'overfitting. Par exemple en testant avec ces variables :  
+
+```{r echo = TRUE}
+model_lm_5 <- lm(score ~ (sujet + duree + FF + FF.Abs + AV + AV.dB + AV.APQ11 + BTC2 + EFS + CDNL)^2, data =apprentissage)
+```
+
+```{r}
+pred_lm_5_train <- predict(model_lm_5, type = 'response')
+rmse_lm_5_train <- rmse(apprentissage$score, pred_lm_5_train)
+cat('RMSE train : ', rmse_lm_5_train, '\n')
+
+pred_lm_5 <- predict(model_lm_5, newdata = validation, type = 'response')
+rmse_lm_5 <- rmse(validation$score, pred_lm_5)
+cat('RMSE validation : ', rmse_lm_5)
+```
+Nous obtenons quasiment les mêmes résultats avec un nombre de paramètres beaucoup plus élevé.
+
+
+### **Tableau Résultats LM**
+
+```{r}
+# Créer un tableau récapitulatif
+resultats_lm <- data.frame(
+  Modèle = paste('lm_', 1:6, sep = ''),
+  Méthode = c("-", "Durée + sujet", "stepwise", "ElasticNet", "(Durée + sujet)^2", "(Durée + sujet + ...)^2"),
+  RMSE_train = c(rmse_lm_3_train, rmse_lm_1_train, rmse_lm_both_train, rmse_glmnet_train, rmse_lm_4_train, rmse_lm_5_train),
+  RMSE_validation = c(rmse_lm_3, rmse_lm_1, rmse_lm_both, rmse_glmnet, rmse_lm_4, rmse_lm_5),
+  Nb_coefficients = c(length(coefficients(model_lm_3)), length(coefficients(model_lm_1)), 
+                    length(coefficients(lm_both)), length(coefficients(glmnet)),
+                    length(coefficients(model_lm_4)), length(coefficients(model_lm_5)))
+  )
+   # Dans le summary nous avons 41 coefficients sujets que l'on soustrait pour obtenir le nombre de variables et - 42 à cause du one hot encoding pour le glmnet
+
+resultats_lm$AIC <- "-"
+resultats_lm %>%gt()
+```
+
+
+
+## **3.2 Modèles GLM**
+
+Dans cette partie, nous testons cette fois-ci des modèles GLM. Bien que les GLM classiques ne permettent généralement pas de résoudre le problème d'autocorrélation, nous voulons voir si nous pouvons obtenir un modèle avec de meilleurs performances. Pour cela, nous allons dans une première partie ajuster plusieurs lois adaptées à la distribution de la variable réponse. Puis dans une deuxième partie construire plusieurs modèles à partir de celles-ci.  
+
+### **3.2.1 Ajustement de la variable réponse score**
+
+Dans cette étape, nous cherchons à approcher la loi de notre variable réponse via des lois continues positives. 
+
+#### **Loi Normale tronquée**
+
+```{r}
+# Ajuster une distribution normale tronquée avec borne supérieure à l'infini
+fit_truncated <- fitdist(train$score, "norm", method = "mle", start = list(mean = mean(train$score), sd = sd(train$score)))
+# Afficher les résultats
+plot(fit_truncated, demp = TRUE)
+```
+
+#### **Loi log normale**
+
+```{r}
+# Estimation des paramètres de la loi log-normale
+fsl <- fitdist(train$score, "lnorm")
+summary(fsl)
+plot(fsl, demp = TRUE)
+```
+
+#### **Loi Gamma**
+
+```{r}
+fsg <- fitdist(train$score, distr = "gamma", method = "mle", lower = c(5, 0.0))
+summary(fsg)
+plot(fsg, demp = TRUE)
+```
+
+#### **Comparaison et conclusion**
+
+```{r}
+#comparaison
+
+# Comparaison des densités
+denscomp(list(fsg, fsl, fit_truncated), legendtext=c("Gamma", "Lognormale", "Normale tronquée"))
+
+# Comparaison des quantiles
+qqcomp(list(fsg, fsl, fit_truncated), legendtext=c("Gamma", "Lognormale", "Normale tronquée"))
+
+# Comparaison des fonctions de répartition
+cdfcomp(list(fsg, fsl, fit_truncated), legendtext=c("Gamma", "Lognormale", "Normale tronquée"))
+
+# Comparaison des fonctions de probabilité cumulative
+ppcomp(list(fsg, fsl, fit_truncated), legendtext=c("Gamma", "Lognormale", "Normale tronquée"))
+
+# Statistiques de bon ajustement
+gofstat(list(fsg, fsl, fit_truncated), fitnames=c("Gamma", "Lognormale", "Normale tronquée"))
+```
+
+En observant les résultats d'AIC, BIC et des différents tests statistiques sur la qualité d'ajustement, on conclue que le meilleur fit se fait avec la loi normale tronquée. 
+Et en observant le plot de densités, il semble que la densité de la loi de la variable réponse se trouve entre la loi Gamma et la loi normale tronquée. 
+Nous décidons alors de conserver les lois Gamma et normale tronquée pour nos modèles pour la construction de nos modèles. 
+
+
+Par la suite nous allons faire une selection de variables via plusieurs méthodes pour ces 2 lois, puis nous garderons le meilleur modèle parmi ceux construits. 
+
+
+### **3.2.2 Modèles via la loi Gamma**
+
+Tout comme pour les modèles linéaire gaussien, nous modélisons les modèles avec toutes les variables puis avec (score + duree)^2
+
+```{r}
+model_all <- glm(formula= score ~ . - PC1 ,data=apprentissage, family=Gamma(link="log"))
+#custom_summary_glm(model_all, 15)
+```
+
+```{r}
+pred_all_train <- predict(model_all, type = 'response')
+rmse_all_train <- rmse(apprentissage$score, pred_all_train)
+#cat('RMSE train : ', rmse_all_train, '\n')
+
+pred_all <- predict(model_all, newdata = validation, type = 'response')
+rmse_all <- rmse(validation$score, pred_all)
+#cat('RMSE validation : ', rmse_all)
+```
+
+```{r}
+model_glm_poly <- glm(score ~ (sujet + duree)^2, data =apprentissage, family=Gamma(link="log"))
+#custom_summary_glm(model_glm_poly)
+```
+
+```{r}
+pred_poly_train <- predict(model_glm_poly, type = 'response')
+rmse_poly_train <- rmse(apprentissage$score, pred_poly_train)
+#cat('RMSE train : ', rmse_poly_train, '\n')
+
+pred_poly <- predict(model_glm_poly, newdata = validation, type = 'response')
+rmse_poly <- rmse(validation$score, pred_poly)
+#cat('RMSE validation : ', rmse_poly)
+```
+
+
+#### **Selection des variables manuellement via matrice de corrélation**
+
+Pour rappel, nous avons observé que les variables au sein des blocs ***FF*** et ***AA*** sont fortement corrélees.
+Nous selectionnant alors pour ces 2 blocs la varibale la plus corrélée au score, à savoir respectivement  ***FF*** et ***AV.APQ11***, et retirons les autres. Puis nous modélisons le GLM et retirons manuellement les variables ayant des coefficients non significatifs. Affichons ces derniers à l'aide d'une fonction custom affichant par ordre croissant l'importance des coefficients :
+
+
+```{r, echo=TRUE}
+model_cor <- glm(formula= score ~ sujet + duree + FF + AV.APQ11 + BTC1 + BTC2 + CDNL + VFNL + EFS  ,data=apprentissage, family=Gamma(link="log"))
+custom_summary_glm(model_cor)
+```
+Nous variables suivantes comme non significatives (p-value >0.05)et reconstruisons un modèle sans les inclure :
+
+```{r}
+no_sign <- less_significative(model_cor)
+no_sign
+```
+
+En utilisant ces variables de départ, notre modèle nous ressort ceraines variables comme non significatives (p-value >0.05).
+Nous les retirons par la suite. Nous réitérons ce procédé avec les nouvelles variables et obtenons le RMSE : 
+
+```{r}
+no_sign_str <- paste(no_sign, collapse = "-")
+formula <- as.formula(paste("score ~ sujet + duree + FF + AV.APQ11 + BTC1 + BTC2 + CDNL + VFNL + EFS - ", no_sign_str))
+
+model_cor3 <- glm(formula, data=apprentissage, family=Gamma(link="log"))
+#custom_summary_glm(model_cor3)
+```
+
+
+```{r}
+pred_cor_train <- predict(model_cor3, type = 'response')
+rmse_cor_train <- rmse(apprentissage$score, pred_cor_train)
+cat('RMSE train : ', rmse_cor_train, '\n')
+
+pred_cor <- predict(model_cor3, newdata = validation, type = 'response')
+rmse_cor <- rmse(validation$score, pred_cor)
+cat('RMSE validation : ', rmse_cor)
+```
+
+#### **Selection de variables via méthodes pas à pas**
+
+
+```{r}
+model_all <- glm(formula= score ~ . - PC1  ,data=apprentissage, family=Gamma(link="log"))
+model_back <- step(model_all, direction="backward", trace=0)
+```
+
+
+```{r}
+model_forward <- step(model_all, direction="forward", trace=0)
+```
+
+
+```{r}
+model_both <- step(model_all, direction="both", trace=0)
+```
+
+Nous utilisons comme algorithmes de selection pas à pas les algorithmes backward, forward et both.  
+Dans les méthodes qui suivent nous repartons de sujet, durée et toutes les variables cliniques.
+Nous obtenons au final les résultats suivants pour chaque méthodes : 
+
+
+***Backward***
+```{r}
+cat("\nCall:\n", paste(deparse(model_back$call), sep = "\n", collapse = "\n"), "\n\n", sep = "")
+cat("AIC : ", model_back$aic)
+```
+
+***Forward***
+```{r}
+cat("\nCall:\n", paste(deparse(model_forward$call), sep = "\n", collapse = "\n"), "\n\n", sep = "")
+cat("AIC : ", model_forward$aic)
+```
+
+***Both***
+```{r}
+cat("\nCall:\n", paste(deparse(model_both$call), sep = "\n", collapse = "\n"), "\n\n", sep = "")
+cat("AIC : ", model_both$aic)
+```    
+
+
+On obtient les mêmes variables selectionnées entre la méthode stepwise et backward. En se basant sur la métrique AIC nous conservons ces variables.  Regardons le RMSE : 
+
+
+```{r}
+pred_both_train <- predict(model_both, type = 'response')
+rmse_both_train <- rmse(apprentissage$score, pred_both_train)
+cat('RMSE train : ', rmse_both_train, '\n')
+
+pred_both <- predict(model_both, newdata = validation, type = 'response')
+rmse_both <- rmse(validation$score, pred_both)
+cat('RMSE validation : ', rmse_both)
+```
+
+En selectionnant nos variables via la méthode both on a pu légérement amélioré le RMSE obtenu avec toutes nos variables.
+
+
+#### **Selection via matrice de corrélation + stepwise**
+
+Dans cette méthode, nous partons des variables selectionnées via la matrice de corrélation, puis effectuons un stepwise directement dessus  
+
+```{r}
+model_both_2 <- step(model_cor, direction="both", trace = 0)
+custom_summary_glm(model_both_2)
+```
+
+
+```{r}
+pred_both_2_train <- predict(model_both_2, type = 'response')
+rmse_both2_train <- rmse(apprentissage$score, pred_both_2_train)
+cat('RMSE train : ', rmse_both2_train, '\n')
+
+pred_both_2 <- predict(model_both_2, newdata = validation, type = 'response')
+rmse_both_2 <- rmse(validation$score, pred_both_2)
+cat('RMSE validation : ', rmse_both_2)
+```
+
+
+#### **Selection via variables ACP**
+
+```{r, echo = TRUE}
+# Ajuster un modèle GLM avec les variables sujet, durée et PCA1
+model_acp <- glm(score ~ sujet + duree + PC1,  data = apprentissage, family = Gamma(link = "log"))
+#custom_summary_glm(model_acp)
+```
+
+```{r}
+pred_acp_train <- predict(model_acp, type = 'response')
+rmse_acp_train <- rmse(apprentissage$score, pred_acp_train)
+cat('RMSE train : ', rmse_acp_train, '\n')
+
+pred_acp <- predict(model_acp, newdata = validation, type = 'response')
+rmse_acp <- rmse(validation$score, pred_acp)
+cat('RMSE validation : ', rmse_acp)
+```
+
+
+```{r results='asis'}
+# Créer un tableau récapitulatif
+resultats_gamma <- data.frame(
+  Modèle = paste('gamma_', 1:6, sep = ''),
+  Méthode = c("-", "Corrélation", "Stepwise", "Stepwise + corrélation", "Modèle avec ACP", "(Duree + sujet)^2"),
+  RMSE_train = c(rmse_all_train, rmse_cor_train, rmse_both_train, rmse_both2_train, rmse_acp_train, rmse_poly_train),
+  RMSE_validation = c(rmse_all, rmse_cor, rmse_both, rmse_both_2, rmse_acp, rmse_poly),
+  AIC = c(model_all$aic, model_cor3$aic, model_both$aic, model_both_2$aic, model_acp$aic, model_glm_poly$aic),
+  Nb_coefficients = c(length(coefficients(model_all)),length(coefficients(model_cor3)), 
+                      length(coefficients(model_both)),length(coefficients(model_both_2)), 
+                      length(coefficients(model_acp)),length(coefficients(model_glm_poly))
+                      )
+)
+
+#resultats_gamma %>%gt()
+```
+
+
+
+### **3.2.3 Modèle avec la loi normale tronquée :**
+
+Tout comme précédemment, nous utlisons des méthodes de selections de variables. Cependant nous nous limiterons à la méthode de selection manuelle avec la corrélation et l'ACP. 
+Nous testerons aussi un modèle GLM loi normale tronquée avec les variables selectionnées par le stepwise que l'on a obtenu avec le GLM loi Gamma.   
+
+
+```{r, warning=FALSE}
+model_all_trunc <- truncreg(score ~ . - PC1, data = apprentissage, left = TRUE)
+```
+
+
+```{r}
+pred_all_trunc_train <- predict(model_all_trunc, type = 'response')
+rmse_all_trunc_train <- rmse(apprentissage$score, pred_all_trunc_train)
+#cat('RMSE train : ', rmse_all_trunc_train, '\n')
+
+pred_all_trunc <- predict(model_all_trunc, newdata = validation, type = 'response')
+rmse_all_trunc <- rmse(validation$score, pred_all_trunc)
+#cat('RMSE validation : ', rmse_all_trunc)
+```
+
+```{r, warning=FALSE}
+model_trunc_poly <- truncreg(score ~ (sujet + duree)^2, data =apprentissage, left = TRUE)
+```
+
+
+```{r}
+pred_poly_trunc_train <- predict(model_trunc_poly, type = 'response')
+rmse_poly_trunc_train <- rmse(apprentissage$score, pred_poly_trunc_train)
+#cat('RMSE train : ', rmse_poly_trunc_train, '\n')
+
+pred_poly_trunc <- predict(model_trunc_poly, newdata = validation, type = 'response')
+rmse_poly_trunc <- rmse(validation$score, pred_poly_trunc)
+#cat('RMSE validation : ', rmse_poly_trunc)
+```
+
+```{r, warning = FALSE}
+# Ajuster un modèle GLM avec distribution normale tronquée à gauche
+model_left_1 <- truncreg(score ~ sujet + duree + FF + AV.APQ11 + BTC1 + BTC2 + CDNL + VFNL + EFS, data = apprentissage, left = TRUE)
+#custom_summary_glm(model_left_1)
+```
+
+
+```{r}
+no_sign <- less_significative(model_left_1)
+no_sign_str <- paste(no_sign, collapse = "-")
+formula <- as.formula(paste("score ~ sujet + duree + FF + AV.APQ11 + BTC1 + BTC2 + CDNL + VFNL + EFS - ", no_sign_str))
+#no_sign
+```
+
+
+```{r, warning=FALSE}
+model_left_3 <- truncreg(formula, data = apprentissage, left = TRUE)
+#custom_summary_glm(model_left_3)
+```
+
+ 
+```{r}
+pred_left_1_train <- predict(model_left_3, type = 'response')
+rmse_left_1_train <- rmse(apprentissage$score, pred_left_1_train)
+#cat('RMSE train : ', rmse_left_1_train, '\n')
+
+pred_corr_1 <- predict(model_left_3, newdata = validation, type = 'response')
+rmse_left_1 <- rmse(validation$score, pred_corr_1)
+#cat('RMSE validation : ', rmse_left_1)
+```
+
+
+```{r, warning = FALSE}
+# Ajuster un modèle GLM avec distribution normale tronquée à gauche
+model_left_4 <- truncreg(score ~ sujet+  duree +  FF.Abs+ BTC2 + CDNL + EFS, data = apprentissage, left = TRUE)
+#custom_summary_glm(model_left_4)
+```
+
+```{r}
+pred_left_2_train <- predict(model_left_4, type = 'response')
+rmse_left_2_train <- rmse(apprentissage$score, pred_left_2_train)
+#cat('RMSE train : ', rmse_left_2_train, '\n')
+
+pred_corr_2 <- predict(model_left_4, newdata = validation, type = 'response')
+rmse_left_2 <- rmse(validation$score, pred_corr_2)
+#cat('RMSE validation : ', rmse_left_2)
+```
+
+
+```{r, warning = FALSE}
+# Ajuster un modèle GLM avec les variables sujet, durée et PCA1
+model_acp_1 <- truncreg(score ~ sujet + duree + PC1,  data = apprentissage, left = TRUE)
+#custom_summary_glm(model_acp_1)
+```
+
+```{r}
+pred_left_3_train <- predict(model_acp_1, type = 'response')
+rmse_left_3_train <- rmse(apprentissage$score, pred_left_3_train)
+#cat('RMSE train : ', rmse_left_3_train, '\n')
+
+pred_acp_left <- predict(model_acp_1, newdata = validation, type = 'response')
+rmse_left_3 <- rmse(validation$score, pred_acp_left)
+#cat('RMSE validation : ', rmse_left_3)
+```
+
+
+```{r}
+resultats_nt <- data.frame(
+  Modèle = paste('tronquee_normale_', 1:5, sep = ''),
+  Méthode = c("-", "Corr manuelle", "Stepwise", "Modèle avec ACP", "(Duree + sujet)^2"),
+  RMSE_train = c(rmse_all_trunc_train, rmse_left_1_train, rmse_left_2_train, rmse_left_3_train, rmse_poly_trunc_train), 
+  RMSE_validation = c(rmse_all_trunc, rmse_left_1, rmse_left_2, rmse_left_3, rmse_poly_trunc), 
+  AIC = c(get_AIC_from_L(model_all_trunc), get_AIC_from_L(model_left_3),
+          get_AIC_from_L(model_left_4), get_AIC_from_L(model_acp_1),
+          get_AIC_from_L(model_trunc_poly)),
+  Nb_coefficients = c(length(coefficients(model_all_trunc)),length(coefficients(model_left_3)),
+                      length(coefficients(model_left_4)), length(coefficients(model_acp_1)), 
+                      length(coefficients(model_trunc_poly)))
+  # Dans le summary nous avons 41 coefficients sujets et 1 coefficient sigma que l'on soustrait pour obtenir le nombre de variables
+  )
+```
+
+
+```{r}
+resultats_nt <- data.frame(
+  Modèle = paste('tronquee_normale_', 1:3, sep = ''),
+  Méthode = c("Corr manuelle", "Stepwise", "Modèle avec ACP"),
+  RMSE_train = c(rmse_left_1_train, rmse_left_2_train, rmse_left_3_train), 
+  RMSE_validation = c(rmse_left_1, rmse_left_2, rmse_left_3), 
+  AIC = c(get_AIC_from_L(model_left_3), get_AIC_from_L(model_left_4), get_AIC_from_L(model_acp_1)),
+  Nb_coefficients = c(length(coefficients(model_left_3)), length(coefficients(model_left_4)), length(coefficients(model_acp_1)))
+  # Dans le summary nous avons 41 coefficients sujets et 1 coefficient sigma que l'on soustrait pour obtenir le nombre de variables
+  )
+
+```
+
+
+## **3.3 Bilan modèles**
+
+Comparons à présent tous nos modèles construits jusqu'à présent, nous ordonnant les modèle selon la métrique de RMSE validation :  
+
+```{r}
+final_table <- rbind(resultats_lm, resultats_gamma, resultats_nt)
+final_table <- final_table[order(final_table$RMSE_validation), ]
+
+final_table %>%gt()
+```
+
+
+Nous observons que tous nos modèles linéaires sans variables supplémentaires obtiennent des performances similaires, et ce même en testant d'autres lois. Dans une partie annexe, nous analysons les résidus des GLM loi Gamma où nous pouvons observer le même soucis lié à l'autocorrélation. Nous en déduisons que l'ensemble de ces modèles ne sont pas adaptés.
+
+Notons également que le RMSE de validation est bien plus élevé que celui de l'apprentissage, cela peut s'expliquer de 2 manières.  
+D'une part, nous savons que ces modèles ne parviennent pas à généraliser correctement notre variable réponse. Mais aussi et surtout, comme observée sur la partie analyse descriptive, nous observons un changement abrupt de la relation durée/score à partir d'un certain seuil de durée. Notre set de validation ne comportant que des observations dont la durée est supérieur au quantile 70% cela confirme la tendance graphique observée.  
+
+
+Concernant le choix la prédiction et le modèle finale, nous décidons de retenir le modèle linéaire gaussien avec interaction **durée** et **sujet** (*lm_5*), d'une part, car le RMSE est meilleur en comparaison aux modèles sans interactions mais aussi par sa simplicité de fonctionnement, comparé aux modèles avec autres lois.  
+Nous mettons aussi de côté le modèle avec plus d'interactions car sa performance est à peine meilleure, pour un nombre de paramètres bien plus éleve.    
+
+
+Egalement nous faisons le choix délibéré de nous entrainer sur l'ensemble du jeu de données (et donc pas seulement sur le train, validation ou meme le test...) malgré le changement de tendance sur les durées finales. Nous justifions ce choix car nous ne savons pas par la suite si cette tendance se poursuivra pour le jeu de test. De plus s'entrainer sur seulement une portion faible du dataset peut être risqué, encore plus si la tendance change de nouveau après le train.  
+
+Enfin nous avons gardé jusqu'à présent un set de test. Nous n'utiliserons ce dernier seulement pour comparer les modèles notre modèle final, avec des modèles complémentaires, et faire une dernière estimation de notre possible erreur attendu.
+
+
+# **4.Modèle final**
+
+Comme dit précédemment notre modèle final, sera le modèle linéaire classique avec interaction :
+
+```{r}
+train_final <- subset(train_selected, select = -c(PC1))
+```
+
+```{r, echo = TRUE}
+mod_Final <- lm(score ~ (sujet + duree)^2, data =train_final)
+my.summary.lm(summary(mod_Final),my.rows = c(2:4, 41:50))
+```
+## **4.1 Analyse des outliers**
+
+```{r}
+plot(mod_Final, 5)
+```
+
+```{r}
+plot(mod_Final, 4)
+```
+
+En analysant les différentes distance de Cook, nous observons que bien que certains points semblent se détacher des autres, aucun n'est significatif sur l'estimation des coefficients (distance < 1).
+
+
+## **4.3 Hypothèses**
+
+```{r}
+par(mfrow=c(2, 2))
+plot(mod_Final,1,main = 'P1 : Errors centered ')
+plot(mod_Final,3, main ='P2 : Homosedascticity ')
+acf(residuals(mod_Final), main = 'P3 : Errors uncorrelated')
+plot(mod_Final,2, main = 'P4 : Errors ~ Gaussian distribution')
+```
+
+Comme dans la **première partie** avec le modèle score ~ duree + sujet, nous ne respectons pas les hypothèses d'autocorrélation ni de distribution gaussienne, avec certains outliers dans les predictions comme.
+
+
+## **4.5 Predictions**
+
+Calculons dans un premier temps le RMSE final sur l'ensemble du train : 
+
+```{r}
+pred_mod_Final <- predict(mod_Final, type = 'response')
+rmse_mod_Final <- rmse(train$score, pred_mod_Final)
+cat('RMSE ensemble jeu de données : ', rmse_mod_Final)
+```
+Notre RMSE sur l'ensemble du jeu de train global est meilleur que notre RMSE de validation et moins bon que celui de notre set d'apprentissage, chose normale car nous avons séparer nos jeu de données entre avant et après le changement de tendance dans les durées vs scores. Sortons désormais les prédictions de notre modèle : 
+
+```{r, echo=TRUE}
+hat_y<-as.data.frame(predict(mod_Final,newdata=testX))
+colnames(hat_y) <- c("hat_y")
+#write_csv(hat_y,'hat_y.csv')
+```
+
+
+
+# **5. Modèles complémentaires**
+
+Dans cette partie nous explorons d'autres pistes que les modèles précédemments implémantés. Egalement dans un soucis de comparaison aux modèles linéaires sans interactions, nous gardons les varibles bruts sans intégrer de variables supplémentaires liées à des interactions. 
+
+## **5.1 Modèle fit pour chaque sujet**
+
+Nous l'avons montré plusieurs fois, que le sujet jouait un rôle important dans la prédiction de score. Une idée naïve pourrait être alors de construire un modèle pour chaque sujet, et faire des predictions pour un sujet, son modèle associé. 
+En faisant de la sorte, nous calculons un RMSE pour chaque sujet et faisons la moyenne pour un obtenir un RMSE global. Nous obtenons dès lors les résultats suivants :  
+
+```{r warning = FALSE, message = FALSE}
+
+# Je rajoute le test de set pour directement faire les predictions et pas reboucler par la suite pour la comparaison finale 
+
+fit_on_subject <- function(train, validation, test, suj) {
+  train_subject <- train %>% filter(sujet == suj)
+  validation_subject <- validation %>% filter(sujet == suj)
+  test_subject <- test %>% filter(sujet == suj)
+  
+  lm_sujet <- lm(score ~ duree, data = train_subject)
+  
+  pred_train <- predict(lm_sujet, type = 'response')
+  pred_validation <- predict(lm_sujet, newdata = validation_subject, type = 'response')
+  pred_test <- predict(lm_sujet, newdata = test_subject, type = 'response')
+  
+  
+  rmse_train <- rmse(train_subject$score, pred_train)
+  rmse_validation <- rmse(validation_subject$score, pred_validation)
+  rmse_test <- rmse(test_subject$score, pred_test)
+  
+  return(c(rmse_train, rmse_validation, rmse_test))
+}
+
+list_rmse_apprentissage <- c()
+list_rmse_validation <- c()
+list_rmse_test <- c()
+
+unique_subjects <- unique(apprentissage$sujet)
+for (sujet in unique_subjects){
+  results_sujet <- fit_on_subject(apprentissage, validation, test, sujet)
+  
+  list_rmse_apprentissage <- c(list_rmse_apprentissage, results_sujet[1])
+  list_rmse_validation <- c(list_rmse_validation, results_sujet[2])
+  list_rmse_test <- c(list_rmse_test, results_sujet[3])
+  
+}
+
+mean_rmse_apprentissage <- mean(list_rmse_apprentissage)
+mean_rmse_validation <- mean(list_rmse_validation)
+mean_rmse_test <- mean(list_rmse_test)
+
+```
+
+```{r}
+cat('RMSE train : ', mean_rmse_apprentissage, '\n')
+cat('RMSE validation : ', mean_rmse_validation)
+```
+Nous pouvons remarquer une très nette amélioration de notre RMSE comparé aux autres modèles classiques ! 
+
+## **5.2 Random forest**
+
+Cette fois-ci nous testons un modèle global pour tous les sujets avec un random forest. 
+
+```{r, echo = TRUE}
+set.seed(2023)
+bestmtry <- tuneRF(x = predictors_train, y = target_train, stepFactor=1.5, improve=1e-5, ntree=500)
+```
+
+En tunant le random forest, nous trouvons que le nombre optimal de variables pour la construction de chaque arbre (mtry) est 59; soit le nombre maximal de variables possile (42 colonnes sujets + les autres variables). Construisons alors une forêt aléatoire avec ce paramètre et affichons l'importance des variables :  
+
+```{r, echo = TRUE}
+set.seed(2023)
+rf_model <- randomForest(x = predictors_train, y = target_train, importance = TRUE, mtry= 59)
+```
+
+```{r}
+predicted_scores_train <- predict(rf_model, newdata = matrix_train)
+predicted_scores_validation <- predict(rf_model, newdata = matrix_validation)
+
+rmse_random_forest_train <- rmse(apprentissage$score, predicted_scores_train)
+cat('RMSE train : ', rmse_random_forest_train, '\n')
+
+rmse_random_forest <- rmse(validation$score, predicted_scores_validation)
+cat('RMSE validation : ', rmse_random_forest)
+```
+
+
+```{r, echo = TRUE}
+predicted_scores_train <- predict(rf_model, newdata = matrix_train)
+predicted_scores_validation <- predict(rf_model, newdata = matrix_validation)
+
+importance(rf_model)
+```
+
+Nous observons que via l'indice de Gini et le MSE que le modèle apporte **très peu d'importance** aux variables cliniques. Nous reconstruisons alors un random forest avec seulement **durée** et **sujet** comme variables et obtenons les résultats suivants :  
+
+
+```{r}
+set.seed(2023)
+
+modified_apprentissage <- apprentissage[,c("duree","sujet", "score")]
+modified_apprentissage_one<- dummyVars(" ~ .", data = modified_apprentissage)
+modified_apprentissage_one <- data.frame(predict(modified_apprentissage_one, newdata = modified_apprentissage))
+
+predictors_modified <- modified_apprentissage_one[, !names(modified_apprentissage_one) %in% "score"]
+target_modified <- modified_apprentissage_one$score
+
+rf_model <- randomForest(x = predictors_modified, y = target_modified, importance = TRUE, mtry= 43)
+
+predicted_scores_train <- predict(rf_model, newdata = matrix_train)
+predicted_scores_validation <- predict(rf_model, newdata = matrix_validation)
+```
+
+```{r}
+rmse_random_forest_train <- rmse(apprentissage$score, predicted_scores_train)
+cat('RMSE train : ', rmse_random_forest_train, '\n')
+
+rmse_random_forest <- rmse(validation$score, predicted_scores_validation)
+cat('RMSE validation : ', rmse_random_forest)
+```
+Nous observons alors une nette amélioration avec le train et le test. 
+
+
+## **5.3 XGBOOST**
+
+Pour le XGBOOST nous lançons 100 rounds et nous arrêtons lorsque le modèle commence à overfit (early stopping), c'est à dire quand le RMSE de jeu de validation ne baisse plus. 
+
+```{r}
+set.seed(2023)
+dtrain <- xgb.DMatrix(data = matrix_train, label= train_label)
+dtest <- xgb.DMatrix(data = matrix_validation, label= validation_label)
+
+
+watchlist <- list(train=dtrain, test=dtest)
+bst <- xgb.train(data=dtrain, max.depth=2, eta=1, nthread = 2, nrounds=100, watchlist=watchlist, verbose=0)
+```
+
+
+```{r warning = FALSE, message = FALSE, echo = TRUE}
+set.seed(2023)
+df_xgboost <- bst$evaluation_log
+df_xgboost_m <- melt(df_xgboost, na.rm = FALSE, value.name = 'value', id = 'iter')
+```
+
+
+```{r warning = FALSE, message = FALSE}
+ggplot(df_xgboost_m, aes(x=iter, y=value, group=variable)) +
+  geom_line(aes(color=variable))+
+  geom_point(aes(color=variable))+
+  theme_minimal()
+```
+
+Le minimum de RMSE pour le set de validation est à l'époque 34, nous retenons ce modèle et obtenons les résultats :
+
+```{r warning = FALSE, message = FALSE}
+rmse_xgboost_train <- bst$evaluation_log[34]$train_rmse
+rmse_xgboost <- bst$evaluation_log[34]$test_rmse
+
+cat('RMSE train : ', rmse_xgboost_train, '\n')
+cat('RMSE validation : ', rmse_xgboost)
+```
+
+## **5.4 Linear mixed effect model**
+
+Enfin nous terminons en implémentant une autre catégorie de modèles : les modèles linéaires à effets aléatoires mixtes. Ces modèles sont spécialement adaptés pour notre type de dataset, lorsque plusieurs individus sont présents plusieurs fois à des instants différents, provoquant l'autocorrélation des résidus.
+Ces modèles permettent d'introduire une pente aléatoire propre à chaque sujet et donc de mieux généraliser la prédiction (sous condition d'avoir suffisamment d'observations pour chaque sujet).  
+
+
+```{r warning = FALSE, message = FALSE, echo = TRUE}
+lme_1 <- lmer(score ~ duree + (1+ duree|sujet), data = apprentissage)
+summary(lme_1)
+```
+Dans ce modèle simpliste avec seulement la ***durée*** et le ***sujet***, nous avons rajouter une pente et un intercept random. 
+
+
+```{r warning = FALSE, message = FALSE}
+plot(lme_1)
+```
+
+En affichant nous voyons bien que les résultats sont améliorés comparé à un modèle linéaire classique sans ajouts de variables. Pour le RMSE nous obtenons : 
+
+```{r}
+pred_lme_1_train <- predict(lme_1, type = 'response')
+rmse_lme_1_train <- rmse(apprentissage$score, pred_lme_1_train)
+cat('RMSE train : ', rmse_lme_1_train, '\n')
+
+pred_lme_1 <- predict(lme_1, newdata = validation, type = 'response')
+rmse_lme_1 <- rmse(validation$score, pred_lme_1)
+cat('RMSE validation : ', rmse_lme_1)
+```
+
+Tout comme nos autres modèles, nous pouvons augmenter le degrès via des interactions, par exemple de cette manière : 
+
+```{r warning = FALSE, message = FALSE, echo = TRUE}
+lme_2 <- glmer(score ~ poly(duree, 2) + (1 + poly(duree, 2) | sujet), data = apprentissage)
+```
+
+
+```{r warning = FALSE, message = FALSE}
+pred_lme_2_train <- predict(lme_2, type = 'response')
+rmse_lme_2_train <- rmse(apprentissage$score, pred_lme_2_train)
+cat('RMSE train : ', rmse_lme_2_train, '\n')
+
+pred_lme_2 <- predict(lme_2, newdata = validation, type = 'response')
+rmse_lme_2 <- rmse(validation$score, pred_lme_2)
+cat('RMSE validation : ', rmse_lme_2)
+```
+
+Notons qu'ayant réduit l'autocorrélation, celle-ci reste toujours présente : 
+
+```{r warning = FALSE, message = FALSE}
+residuals_lme_1 <- resid(lme_1)
+residuals_lme_2 <- resid(lme_2)
+
+par(mfrow=c(1, 2))
+acf(residuals_lme_1)
+acf(residuals_lme_2)
+```
+
+## **5.5 Bilan modèle et évaluation set de test**
+
+```{r}
+resultats_comp <- data.frame(
+  Modèle = c('LM fit par sujet', 'Random forest', 'xgboost', 'LME', 'LME deg. 2'),
+  RMSE_train = c(mean_rmse_apprentissage, rmse_random_forest_train, rmse_xgboost_train, rmse_lme_1_train, rmse_lme_2_train), 
+  RMSE_validation = c(mean_rmse_validation, rmse_random_forest, rmse_xgboost, rmse_lme_1, rmse_lme_2)
+  )
+
+resultats_comp %>%gt()
+```
+
+Nous voyons que le meilleur modèle est le modèle random forest, ce sera donc le modèle retenu parmi nos modèles complémentaires.
+Nous justifions ce choix d'une part par les performances, mais aussi sa simplicité d'implémentation comparé par exemple au modèle fittant par sujet.
+Pour finir,  évaluons nos 2 modèles retenus, à savoir le modèle linéaire avec interaction et le random forest sur le *set de test* : 
+
+
+```{r}
+pred_lm_inter_test <- predict(model_lm_4, type = 'response', newdata=test)
+rmse_inter_test <- rmse(test$score, pred_lm_inter_test)
+cat('RMSE interaction sur le jeu de test : ', rmse_inter_test)
+
+
+pred_rf_test <- predict(rf_model, newdata = matrix_test)
+rmse_random_forest_train <- rmse(test$score, pred_rf_test)
+cat('\nRMSE random forest sur le jeu de test : ', rmse_random_forest_train)
+```
+Encore une fois, ces scores de RMSE montrent bien le changement de tendance dans le jeu données. Ces RMSE peuvent être interpretrer comme l'*erreur moyenne* attendu si nos modèles finaux n'étaient entrainés que sur la première portion des données (70 %). Pour cette raison, il est important pour nos modèles finaux d'être entrainer sur l'ensemble du jeu de données (et pas non plus sur la dernière portion des données voire les explications du bilan partie 3)! 
+
+
+## **5.5 Predictions**
+Comme vu juste avant, pour la prediction, nous nous entrainons sur tout le jeu de données et pas seulement apprentissage : 
+```{r, echo=TRUE}
+
+train_final_one <- train_final[,c("duree","sujet", "score")]
+train_final_one<- dummyVars(" ~.", data = train_final_one)
+train_final_one <- data.frame(predict(train_final_one, newdata = train_final))
+
+predictors_train_final <- train_final_one[, !names(train_final_one) %in% "score"]
+target_train_final <- train_final_one$score
+
+rf_model_final <- randomForest(x = predictors_train_final, y = target_train_final, importance = TRUE, mtry= 43)
+```
+
+
+```{r}
+
+predicted_scores_train <- predict(rf_model_final, newdata = matrix_train)
+predicted_scores_validation <- predict(rf_model_final, newdata = matrix_validation)
+
+rmse_random_forest_train <- rmse(apprentissage$score, predicted_scores_train)
+#cat('RMSE train : ', rmse_random_forest_train, '\n')
+
+rmse_random_forest <- rmse(validation$score, predicted_scores_validation)
+#cat('RMSE validation : ', rmse_random_forest)
+
+# OK
+```
+
+```{r, echo=TRUE}
+hat_y_rf<-as.data.frame(predict(rf_model_final, newdata=matrix_real_test))
+colnames(hat_y_rf) <- c("hat_y_rf")
+
+combined_df <- cbind(hat_y, hat_y_rf)
+
+write_csv(combined_df,'hat_y.csv')
+```
+
+
+# **6. Conclusion**
+
+En conclusion de ce projet, nous avons vu via l'analyse descriptive que notre jeu de donnée était un *panel dataset*, caractérisé par la présence de plusieurs individus à des instants T différents. Nous avons également relevé le caractère spécifique de la variable **sujet** et son influence sur le score.  
+En construisant plusieurs modèles linéaires avec différentes lois (Gaussien, Gamma, ...) et seulement avec les variables disponibles, il est clair qu'il n'est pas possible de prédire correctement les scores. D'une part en regardant les performances, mais aussi car les hypothèses sous-jacentes aux modèles ne sont pas respectées. 
+
+Nous nous sommes alors tournés vers d'autres solutions comme la construction de nouvelles variables issues d'interactions entre les variables originelles (**duree** et **sujet**). Bien que cette méthode augmente les performances, certaines hypothèses ne sont toujours pas respectées. Enfin en élargant nos possibilitées à d'autres modèles pouvant capter des relations non linéaires type random forest, xgboost nous avons pu obtenir des résultats satisfaisants sans avoir à utiliser des interactions.
+
+Notre conclusion sur cette étude est qu'il n'est pas possible de prédire les scores avec les variables cliniques disponibles sans prendre en considération le **sujet**. Même en utilisant cette variable, il nous faut aussi faire attention au choix de modèle que l'on utilise.
+
+Parmi les orientations futures de cette étude, nous pouvons mentionner l'exploration plus profonde de modèle adapté pour le forecasting (modèles ARIMA, RNN, ...) dont la recherche de minimisation de l'autocorrélation est le principal objectif. Egalement, la recherce de variables cliniques plus pertinentes.
+
+Enfin rappelons que nous avons supposé le jeu de données comme propre et sans erreurs, malgré le fait que nous ayons relevé certains éléments (comme des durées négatives ou des duplicatas de sujets à la même durée) qui mériteraient une exploration plus profonde et une discussion avec des gens du métier.
+
+
+# 7. **Annexes**
+## **Vérification des conditions d’application GLM Gamma**
+
+**Analyse de la mutlicolinéarité**
+
+```{r}
+vif(model_cor3)
+```
+
+En effectuant un test VIF (Variance Inflation Factor) 
+Nous regardons plus particulièrement le GVIF ajusté au df. 
+On obtient un GVIF^(1/(2*Df)) de 2.058082 pour la variable EFS, nous confirmant une influence significative de la multicollinéarité pour cette variable. Cependant il peut être intéressant de la conserver comme notre objectif concerne la prédiction et pas l'interprétation des coefficients pour cette partie. 
+
+**Analyse des outliers**
+
+Affichons tout d'abord la distance de Cook pour chaque individu : 
+```{r}
+plot(model_cor3, 4)
+```
+
+Nous observons qu'aucune des observations a une influence significative sur les coefficients du modèle. 
+
+```{r}
+plot(model_cor3, 5)
+```
+
+
+```{r}
+simulationOutput <- simulateResiduals(fittedModel = model_cor3, plot = F)
+plot(simulationOutput)
+```
+
+Ces graphiques peuvent indiquer plusieurs choses : ou bien notre modèle est trop complexe par rapport à la variation observée dans les données. Ou bien cela est peut-être due à la non-indépendance des données, notamment l'autocorrélation temporelle. Nous devons vérifier que notre modèle n'est pas surajusté aux tendances temporelles ou à d'autres structures de dépendance dans les données.
+
+
+```{r}
+residuals <- residuals(model_cor3, type = "pearson")
+# Calculer la fonction d'autocorrélation (ACF) des résidus
+acf(residuals)
+```
+
+On voit de nombreuses bars dépasser le seuil. Nous avons la confirmation d'une autocorrélation dans les résidus. Nous pouvons donc bien conclure que les GLM ne sont pas adaptés pour ce type de dataset. 
