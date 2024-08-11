@@ -191,30 +191,15 @@ all(testX$sujet %in% train$sujet)
 
 En explorant le dataset, nous observons qu'un même sujet apparait plusieurs fois avec la même durée. Par exemple le sujet 1 possède plusieurs durées à environ 5.645 (arrondi) :   
 
+| sujet | age | genre | duree  | score | FF    | FF.Abs  | FF.RAP | FF.PPQ5 | FF.DDP | AV     | AV.dB | AV.APQ3 | AV.APQ5 | AV.APQ11 | AV.DDA | BTC1   | BTC2  | CDNL   | EFS    | VFNL   | entier |
+|-------|-----|-------|--------|-------|-------|---------|--------|---------|--------|--------|-------|---------|---------|----------|--------|--------|-------|--------|--------|--------|--------|
+| 1     | 72  | M     | 5.6431 | 28.199| 0.00662| 0.000034 | 0.00401 | 0.00317 | 0.01204 | 0.02565 | 0.230 | 0.01438 | 0.01309 | 0.01662 | 0.04314 | 0.01429 | 21.640 | 0.41888 | 0.54842 | 0.160060 | 5      |
+| 1     | 72  | M     | 5.6431 | 28.199| 0.00348| 0.000015 | 0.00124 | 0.00133 | 0.00372 | 0.01192 | 0.113 | 0.00411 | 0.00463 | 0.00949 | 0.01234 | 0.00924 | 27.927 | 0.37340 | 0.52499 | 0.170660 | 5      |
+| 1     | 72  | M     | 5.6438 | 28.199| 0.00413| 0.000021 | 0.00173 | 0.00165 | 0.00520 | 0.01282 | 0.125 | 0.00555 | 0.00651 | 0.01103 | 0.01665 | 0.03079 | 26.641 | 0.50911 | 0.53637 | 0.251830 | 5      |
+| 1     | 72  | M     | 5.6451 | 28.199| 0.00217| 0.000011 | 0.00086 | 0.00099 | 0.00259 | 0.00798 | 0.072 | 0.00271 | 0.00354 | 0.00781 | 0.00812 | 0.00455 | 30.749 | 0.41216 | 0.54572 | 0.094704 | 5      |
+| 1     | 72  | M     | 5.6458 | 28.199| 0.00294| 0.000015 | 0.00121 | 0.00125 | 0.00362 | 0.01058 | 0.098 | 0.00459 | 0.00495 | 0.00888 | 0.01377 | 0.01492 | 27.530 | 0.40986 | 0.53572 | 0.166350 | 5      |
+| 1     | 72  | M     | 5.6458 | 28.199| 0.00250| 0.000013 | 0.00110 | 0.00090 | 0.00331 | 0.00631 | 0.058 | 0.00222 | 0.00259 | 0.00579 | 0.00665 | 0.00382 | 32.102 | 0.31053 | 0.52767 | 0.065937 | 5      |
 
-```
-##   sujet age genre  duree  score      FF    FF.Abs  FF.RAP FF.PPQ5  FF.DDP
-## 1     1  72     M 5.6431 28.199 0.00662 3.380e-05 0.00401 0.00317 0.01204
-## 2     1  72     M 5.6431 28.199 0.00348 1.547e-05 0.00124 0.00133 0.00372
-## 3     1  72     M 5.6438 28.199 0.00413 2.067e-05 0.00173 0.00165 0.00520
-## 4     1  72     M 5.6451 28.199 0.00217 1.144e-05 0.00086 0.00099 0.00259
-## 5     1  72     M 5.6458 28.199 0.00294 1.456e-05 0.00121 0.00125 0.00362
-## 6     1  72     M 5.6458 28.199 0.00250 1.278e-05 0.00110 0.00090 0.00331
-##        AV AV.dB AV.APQ3 AV.APQ5 AV.APQ11  AV.DDA     BTC1   BTC2    CDNL
-## 1 0.02565 0.230 0.01438 0.01309  0.01662 0.04314 0.014290 21.640 0.41888
-## 2 0.01192 0.113 0.00411 0.00463  0.00949 0.01234 0.009238 27.927 0.37340
-## 3 0.01282 0.125 0.00555 0.00651  0.01103 0.01665 0.030790 26.641 0.50911
-## 4 0.00798 0.072 0.00271 0.00354  0.00781 0.00812 0.004547 30.749 0.41216
-## 5 0.01058 0.098 0.00459 0.00495  0.00888 0.01377 0.014919 27.530 0.40986
-## 6 0.00631 0.058 0.00222 0.00259  0.00579 0.00665 0.003822 32.102 0.31053
-##       EFS     VFNL entier
-## 1 0.54842 0.160060      5
-## 2 0.52499 0.170660      5
-## 3 0.53637 0.251830      5
-## 4 0.54572 0.094704      5
-## 5 0.53572 0.166350      5
-## 6 0.52767 0.065937      5
-```
 
 Nous observons également que la variance des variables pour cette même durée est relativement élevée. Il est difficile sans avis du métier de savoir si ces observations constituent des anomalies (et encore plus quelles lignes garder si c'est le cas !). 
 Nous supposons qu'il s'agisse d'un seul prélevement et que les résultats sont observés à par exemple plusieurs heures à la même journée.  
@@ -822,15 +807,14 @@ Nous obtenons quasiment les mêmes résultats avec un nombre de paramètres beau
 ### **Tableau Résultats LM**
 
 
-```
-##   Modèle                 Méthode RMSE_train RMSE_validation Nb_coefficients AIC
-## 1   lm_1                       - 1.47884349        2.614845              59   -
-## 2   lm_2           Durée + sujet 1.49639956        2.635391              43   -
-## 3   lm_3                stepwise 1.48005043        2.619569              50   -
-## 4   lm_4              ElasticNet 1.48010436        2.615213              60   -
-## 5   lm_5       (Durée + sujet)^2 0.08734050        1.172411              84   -
-## 6   lm_6 (Durée + sujet + ...)^2 0.07681077        1.160875             456   -
-```
+| Modèle                 | Méthode                  | RMSE_train | RMSE_validation | Nb_coefficients | AIC |
+|------------------------|--------------------------|------------|-----------------|-----------------|-----|
+| lm_1                   | -                        | 1.47884349 | 2.614845        | 59              | -   |
+| lm_2                   | Durée + sujet            | 1.49639956 | 2.635391        | 43              | -   |
+| lm_3                   | stepwise                 | 1.48005043 | 2.619569        | 50              | -   |
+| lm_4                   | ElasticNet               | 1.48010436 | 2.615213        | 60              | -   |
+| lm_5                   | (Durée + sujet)^2        | 0.08734050 | 1.172411        | 84              | -   |
+| lm_6                   | (Durée + sujet + ...)^2  | 0.07681077 | 1.160875        | 456             | -   |
 
 
 
@@ -1164,40 +1148,27 @@ Nous testerons aussi un modèle GLM loi normale tronquée avec les variables sel
 Comparons à présent tous nos modèles construits jusqu'à présent, nous ordonnant les modèle selon la métrique de RMSE validation :  
 
 
-```
-##                Modèle                 Méthode RMSE_train RMSE_validation
-## 6                lm_6 (Durée + sujet + ...)^2 0.07681077        1.160875
-## 5                lm_5       (Durée + sujet)^2 0.08734050        1.172411
-## 12            gamma_6       (Duree + sujet)^2 0.13227008        1.463488
-## 14 tronquee_normale_2                Stepwise 1.48570720        2.611884
-## 1                lm_1                       - 1.47884349        2.614845
-## 4                lm_4              ElasticNet 1.48010436        2.615213
-## 13 tronquee_normale_1           Corr manuelle 1.48637255        2.618106
-## 3                lm_3                stepwise 1.48005043        2.619569
-## 7             gamma_1                       - 1.48217857        2.625582
-## 9             gamma_3                Stepwise 1.48424682        2.626595
-## 10            gamma_4  Stepwise + corrélation 1.48698061        2.629520
-## 15 tronquee_normale_3         Modèle avec ACP 1.48942641        2.632449
-## 8             gamma_2             Corrélation 1.48899387        2.633998
-## 2                lm_2           Durée + sujet 1.49639956        2.635391
-## 11            gamma_5         Modèle avec ACP 1.48733186        2.659665
-##    Nb_coefficients              AIC
-## 6              456                -
-## 5               84                -
-## 12              84 -1523.2200855671
-## 14              48 11362.4490199075
-## 1               59                -
-## 4               60                -
-## 13              47 11363.2288859713
-## 3               50                -
-## 7               59 11989.3205062651
-## 9               48  11974.618223993
-## 10              46 11975.9220455224
-## 15              45 11371.9693586118
-## 8               45 11980.5390847184
-## 2               43                -
-## 11              44 11994.8410346056
-```
+
+## Modèles
+
+| Modèle                 | Méthode                  | RMSE_train | RMSE_validation | Nb_coefficients | AIC                |
+|------------------------|--------------------------|------------|-----------------|-----------------|--------------------|
+| lm_6                   | (Durée + sujet + ...)^2  | 0.07681077 | 1.160875        | 456             | -                  |
+| lm_5                   | (Durée + sujet)^2        | 0.08734050 | 1.172411        | 84              | -                  |
+| gamma_6                | (Duree + sujet)^2        | 0.13227008 | 1.463488        | 84              | -1523.2200855671   |
+| tronquee_normale_2     | Stepwise                 | 1.48570720 | 2.611884        | 48              | 11362.4490199075   |
+| lm_1                   | -                        | 1.47884349 | 2.614845        | 59              | -                  |
+| lm_4                   | ElasticNet               | 1.48010436 | 2.615213        | 60              | -                  |
+| tronquee_normale_1     | Corr manuelle            | 1.48637255 | 2.618106        | 47              | 11363.2288859713   |
+| lm_3                   | stepwise                 | 1.48005043 | 2.619569        | 50              | -                  |
+| gamma_1                | -                        | 1.48217857 | 2.625582        | 59              | 11989.3205062651   |
+| gamma_3                | Stepwise                 | 1.48424682 | 2.626595        | 48              | 11974.618223993    |
+| gamma_4                | Stepwise + corrélation   | 1.48698061 | 2.629520        | 46              | 11975.9220455224   |
+| tronquee_normale_3     | Modèle avec ACP          | 1.48942641 | 2.632449        | 45              | 11371.9693586118   |
+| gamma_2                | Corrélation              | 1.48899387 | 2.633998        | 45              | 11980.5390847184   |
+| lm_2                   | Durée + sujet            | 1.49639956 | 2.635391        | 43              | -                  |
+| gamma_5                | Modèle avec ACP          | 1.48733186 | 2.659665        | 44              | 11994.8410346056   |
+
 
 
 Nous observons que tous nos modèles linéaires sans variables supplémentaires obtiennent des performances similaires, et ce même en testant d'autres lois. Dans une partie annexe, nous analysons les résidus des GLM loi Gamma où nous pouvons observer le même soucis lié à l'autocorrélation. Nous en déduisons que l'ensemble de ces modèles ne sont pas adaptés.
@@ -1552,14 +1523,14 @@ Notons qu'ayant réduit l'autocorrélation, celle-ci reste toujours présente :
 ## **5.5 Bilan modèle et évaluation set de test**
 
 
-```
-##             Modèle  RMSE_train RMSE_validation
-## 1 LM fit par sujet 0.052786243       0.8669007
-## 2    Random forest 0.007873212       0.6306967
-## 3          xgboost 0.945610821       1.6255345
-## 4              LME 0.087340532       1.1722845
-## 5       LME deg. 2 0.066178565       1.0446413
-```
+| Modèle           | RMSE_train | RMSE_validation |
+|------------------|------------|-----------------|
+| LM fit par sujet | 0.05278624 | 0.8669007       |
+| Random forest    | 0.00787321 | 0.6306967       |
+| xgboost          | 0.94561082 | 1.6255345       |
+| LME              | 0.08734053 | 1.1722845       |
+| LME deg. 2       | 0.06617857 | 1.0446413       |
+
 
 Nous voyons que le meilleur modèle est le modèle random forest, ce sera donc le modèle retenu parmi nos modèles complémentaires.
 Nous justifions ce choix d'une part par les performances, mais aussi sa simplicité d'implémentation comparé par exemple au modèle fittant par sujet.
